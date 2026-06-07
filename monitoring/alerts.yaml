@@ -1,0 +1,116 @@
+groups:
+  - name: vision-moderation.availability
+    rules:
+      # Multi-window fast burn: 2% of monthly budget consumed in 1 h → burn rate 14.4x
+      # Short window (5 m) confirms the spike is real, not a blip.
+      - alert: AvailabilityBurnFast
+        expr: |
+          (
+            sum(rate(http_requests_total{job="vision-moderation",code=~"5.."}[1h]))
+            /
+            sum(rate(http_requests_total{job="vision-moderation"}[1h]))
+          ) > (14.4 * (1 - 0.995))
+          and
+          (
+            sum(rate(http_requests_total{job="vision-moderation",code=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="vision-moderation"}[5m]))
+          ) > (14.4 * (1 - 0.995))
+        for: 5m
+        labels:
+          severity: page
+          team: ml-platform
+        annotations:
+          summary: "Fast availability burn — 2% monthly budget at risk in 1 h"
+          description: >
+            Error rate exceeds 14.4x the allowed burn rate on both the 1 h and
+            5 m windows. At this rate 2% of the monthly error budget will be
+            gone within one hour. SLO target: 99.5%.
+          runbook: "https://runbooks.example.com/vision-moderation/availability-burn"
+
+      # Multi-window slow burn: 10% of monthly budget consumed in 24 h → burn rate 3x
+      # Both the 24 h and 6 h windows must exceed the threshold to avoid
+      # false positives from a single bad hour that already recovered.
+      - alert: AvailabilityBurnSlow
+        expr: |
+          (
+            sum(rate(http_requests_total{job="vision-moderation",code=~"5.."}[24h]))
+            /
+            sum(rate(http_requests_total{job="vision-moderation"}[24h]))
+          ) > (3 * (1 - 0.995))
+          and
+          (
+            sum(rate(http_requests_total{job="vision-moderation",code=~"5.."}[6h]))
+            /
+            sum(rate(http_requests_total{job="vision-moderation"}[6h]))
+          ) > (3 * (1 - 0.995))
+        for: 1h
+        labels:
+          severity: ticket
+          team: ml-platform
+        annotations:
+          summary: "Slow availability burn — 10% monthly budget at risk in 24 h"
+          description: >
+            Error rate exceeds 3x the allowed burn rate on both the 24 h and
+            6 h windows. At this rate 10% of the monthly error budget will be
+            consumed within one day. SLO target: 99.5%.
+          runbook: "https://runbooks.example.com/vision-moderation/availability-burn"
+
+  - name: vision-moderation.latency
+    rules:
+      - alert: LatencyP99High
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{job="vision-moderation"}[5m])
+            )
+          ) > 1
+        for: 5m
+        labels:
+          severity: page
+          team: ml-platform
+        annotations:
+          summary: "P99 latency above 1 s SLO"
+          description: >
+            The 99th-percentile request duration has been above 1 second for
+            5 consecutive minutes. Latency SLO target: p99 < 1 s.
+          runbook: "https://runbooks.example.com/vision-moderation/latency-slo"
+
+  - name: vision-moderation.ml
+    rules:
+      - alert: DriftDetected
+        expr: |
+          max by (feature) (
+            model_feature_psi{job="vision-moderation"}
+          ) > 0.2
+        for: 1h
+        labels:
+          severity: ticket
+          team: ml-platform
+        annotations:
+          summary: "Input feature drift (PSI > 0.2) sustained 1 h"
+          description: >
+            Feature "{{ $labels.feature }}" has a Population Stability Index
+            above 0.2 for the past hour, indicating significant distribution
+            shift between training and serving data.
+          runbook: "https://runbooks.example.com/vision-moderation/drift-detected"
+
+      - alert: ModelVersionMismatch
+        expr: |
+          count(
+            model_serving_info{job="vision-moderation"}
+            unless on (model_version)
+            model_registry_current{job="vision-moderation"}
+          ) > 0
+        for: 5m
+        labels:
+          severity: page
+          team: ml-platform
+        annotations:
+          summary: "Replica serving unexpected model version"
+          description: >
+            {{ $value }} replica(s) are serving a model_version label that does
+            not match the version currently registered in the model registry.
+            Possible incomplete rollout or stuck pod.
+          runbook: "https://runbooks.example.com/vision-moderation/version-mismatch"
